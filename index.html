@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>內容排期看板</title>
+<style>
+  :root{
+    --bg:#f5f1e8; --panel:#fbf8f1; --line:#e4ddcd; --ink:#3d3a33; --muted:#9a927f;
+    --accent:#8a6d3b; --today:#f3e7c8; --weekend:#f0ebdf;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column; overflow:hidden;}
+
+  header{padding:12px 20px 0; display:flex; align-items:center; gap:16px; flex-wrap:wrap;}
+  header h1{font-size:18px; letter-spacing:1px;}
+  .tabs{display:flex; gap:4px;}
+  .tab{padding:7px 16px; font-size:13px; border:1px solid var(--line); border-bottom:none; background:#efe9db; color:var(--muted); border-radius:8px 8px 0 0; cursor:pointer;}
+  .tab.active{background:var(--panel); color:var(--ink); font-weight:600;}
+  .hint{font-size:12px; color:var(--muted); flex:1; min-width:200px;}
+
+  .layout{flex:1; display:flex; min-height:0; border-top:1px solid var(--line);}
+
+  /* ── 左欄 ─────────────────────── */
+  .sidebar{width:220px; flex:none; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; padding:12px;}
+  .sidebar h2{font-size:13px; color:var(--muted); margin-bottom:10px; letter-spacing:2px;}
+  .event-list{flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px;}
+  .event-card{display:flex; align-items:center; gap:8px; padding:9px 10px; background:#fff; border:1px solid var(--line); border-left:5px solid var(--c,#ccc); border-radius:8px; cursor:grab; font-size:13px; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .event-card:active{cursor:grabbing;}
+  .event-card .name{flex:1; word-break:break-all;}
+  .event-card .del{border:none; background:none; color:var(--muted); cursor:pointer; font-size:14px; padding:2px 4px; border-radius:4px;}
+  .event-card .del:hover{color:#b3402f; background:#f7e8e5;}
+  .add-row{display:flex; gap:6px; margin-top:10px;}
+  .add-row input{flex:1; min-width:0; padding:8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff;}
+  .add-row button{padding:8px 12px; border:none; border-radius:8px; background:var(--accent); color:#fff; font-size:13px; cursor:pointer;}
+  .io-row{display:flex; gap:6px; margin-top:8px;}
+  .io-row button{flex:1; padding:6px; font-size:12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; color:var(--muted);}
+  .io-row button:hover{color:var(--ink);}
+
+  /* ── 月看板 ─────────────────────── */
+  .board{flex:1; overflow:auto; cursor:grab; position:relative;}
+  .board.dragging{cursor:grabbing;}
+  .grid{display:grid; width:max-content; background:var(--panel);}
+  .cell,.day-head,.month-head,.row-label{border-right:1px solid var(--line); border-bottom:1px solid var(--line);}
+
+  .corner,.row-label{position:sticky; left:0; z-index:3; background:var(--panel);}
+  .month-head{position:sticky; top:0; z-index:4; background:#efe9db; font-size:12px; font-weight:600; color:var(--accent); padding:5px 8px; letter-spacing:1px;}
+  .day-head{position:sticky; top:27px; z-index:4; background:var(--panel); text-align:center; padding:5px 0 6px; font-size:11px; line-height:1.5;}
+  .day-head .d{font-weight:600; font-size:12px;}
+  .day-head .w{color:var(--muted);}
+  .day-head.weekend{background:var(--weekend);}
+  .day-head.today{background:var(--today);}
+  .day-head.today .d{color:var(--accent);}
+
+  .row-label{display:flex; align-items:center; gap:6px; padding:8px 10px; font-size:13px; border-left:5px solid var(--c,#ccc); min-height:46px; width:100%;}
+  .cell{min-height:46px; width:44px; position:relative;}
+  .cell.weekend{background:var(--weekend);}
+  .cell.today{background:var(--today);}
+  .cell.over,.hour-slot.over,.tray.over{outline:2px dashed var(--accent); outline-offset:-2px; background:#fdf6e3;}
+
+  .chip{position:absolute; inset:5px 3px; border-radius:6px; background:var(--c,#ccc); color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; cursor:grab; overflow:hidden; padding:1px 2px; text-align:center; line-height:1.2; box-shadow:0 1px 3px rgba(0,0,0,.15);}
+  .chip .x{position:absolute; top:0; right:0; width:13px; height:13px; line-height:11px; text-align:center; background:rgba(0,0,0,.25); border-radius:0 6px 0 6px; font-size:10px; display:none; cursor:pointer;}
+  .chip:hover .x{display:block;}
+
+  .empty-tip{padding:30px; color:var(--muted); font-size:13px;}
+  .corner{z-index:6;}
+
+  /* ── 日檢視 ─────────────────────── */
+  .day-view{flex:1; display:none; flex-direction:column; min-height:0; background:var(--panel);}
+  .day-toolbar{display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap;}
+  .day-toolbar button{padding:6px 12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; font-size:13px;}
+  .day-toolbar button:hover{background:#f3eee2;}
+  .day-toolbar .date-text{font-size:15px; font-weight:600; letter-spacing:1px;}
+  .day-toolbar input[type=date]{padding:5px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:#fff;}
+
+  .tray{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 16px; border-bottom:1px solid var(--line); background:#f6f1e4; min-height:44px;}
+  .tray .tray-title{font-size:12px; color:var(--muted); margin-right:4px;}
+  .tray-chip{background:var(--c,#ccc); color:#fff; font-size:12px; padding:5px 10px; border-radius:6px; cursor:grab; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,.12);}
+  .tray .none{font-size:12px; color:var(--muted);}
+
+  .hours{flex:1; overflow-y:auto;}
+  .hour-row{display:flex; border-bottom:1px solid var(--line); min-height:46px;}
+  .hour-row.now{background:var(--today);}
+  .hour-label{width:72px; flex:none; font-size:12px; color:var(--muted); padding:8px 10px 0 0; text-align:right; border-right:1px solid var(--line);}
+  .hour-row.now .hour-label{color:var(--accent); font-weight:700;}
+  .hour-slot{flex:1; display:flex; flex-wrap:wrap; align-content:flex-start; gap:5px; padding:5px 8px;}
+  .day-chip{position:relative; background:var(--c,#ccc); color:#fff; font-size:12px; padding:6px 22px 6px 10px; border-radius:6px; cursor:grab; user-select:none; box-shadow:0 1px 3px rgba(0,0,0,.15); max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .day-chip .x{position:absolute; top:0; right:0; bottom:0; width:16px; background:rgba(0,0,0,.22); display:none; cursor:pointer; text-align:center; line-height:26px; font-size:11px;}
+  .day-chip:hover .x{display:block;}
+</style>
+</head>
+<body>
+<header>
+  <h1>內容排期看板</h1>
+  <div class="tabs">
+    <button class="tab active" data-view="month">排期日曆</button>
+    <button class="tab" data-view="day">當日安排</button>
+  </div>
+  <span class="hint" id="hint"></span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <h2>事件</h2>
+    <div class="event-list" id="eventList"></div>
+    <div class="add-row">
+      <input id="newName" placeholder="新增事件…" maxlength="30">
+      <button id="addBtn">＋</button>
+    </div>
+    <div class="io-row">
+      <button id="exportBtn">匯出備份</button>
+      <button id="importBtn">匯入備份</button>
+      <input type="file" id="importFile" accept=".json" hidden>
+    </div>
+  </aside>
+
+  <!-- 月檢視 -->
+  <div class="board" id="board"><div class="grid" id="grid"></div></div>
+
+  <!-- 日檢視 -->
+  <div class="day-view" id="dayView">
+    <div class="day-toolbar">
+      <button id="prevDay">◀</button>
+      <span class="date-text" id="dayText"></span>
+      <input type="date" id="dayPicker">
+      <button id="todayBtn">今天</button>
+      <button id="nextDay">▶</button>
+    </div>
+    <div class="tray" id="tray"></div>
+    <div class="hours" id="hours"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const PALETTE=['#b3532f','#8a6d3b','#5f7d54','#4d7a8f','#7a5c8f','#a8506e','#5b6d9e','#8f7a3a','#527d72','#94502f'];
+  const WEEK=['日','一','二','三','四','五','六'];
+  const KEY='content-board-v1';
+  const HINTS={
+    month:'把左欄事件拖到日期格；拖曳空白處可移動面板，拖到底會自動延長；點方塊 × 移除',
+    day:'把左欄事件或上方「本月排程」拖到時段；時段方塊可再拖移、按 × 移除（不影響月曆）'
+  };
+
+  // ── 狀態 ──
+  let state=load()||{
+    events:[{id:1,name:'範例事件',color:PALETTE[0]}],
+    placements:[],            // 月：{eventId, date:'YYYY-MM-DD'}
+    day:[],                   // 日：{eventId, date, hour:0-23}
+    nextId:2,
+    months:3
+  };
+  state.day=state.day||[];    // 舊備份相容
+  let view='month';
+  function save(){localStorage.setItem(KEY,JSON.stringify(state));}
+  function load(){try{return JSON.parse(localStorage.getItem(KEY));}catch(e){return null;}}
+
+  // ── 日期工具 ──
+  const today=new Date(); today.setHours(0,0,0,0);
+  const startMonth=new Date(today.getFullYear(),today.getMonth(),1);
+  function fmt(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  function parse(s){const p=s.split('-'); return new Date(+p[0],+p[1]-1,+p[2]);}
+  let dayDate=fmt(today);     // 日檢視目前日期
+
+  function buildDays(){
+    const days=[], end=new Date(startMonth.getFullYear(),startMonth.getMonth()+state.months,1);
+    for(let d=new Date(startMonth); d<end; d.setDate(d.getDate()+1)) days.push(new Date(d));
+    return days;
+  }
+
+  const grid=document.getElementById('grid');
+  const board=document.getElementById('board');
+  const eventList=document.getElementById('eventList');
+  const dayView=document.getElementById('dayView');
+  const hint=document.getElementById('hint');
+
+  function evById(id){return state.events.find(e=>e.id===id);}
+
+  // ── 總渲染 ──
+  function render(){
+    renderSidebar();
+    if(view==='month') renderGrid(); else renderDay();
+    save();
+  }
+
+  // ── 分頁切換 ──
+  document.querySelectorAll('.tab').forEach(t=>{
+    t.addEventListener('click',()=>{
+      view=t.dataset.view;
+      document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===t));
+      board.style.display=view==='month'?'block':'none';
+      dayView.style.display=view==='day'?'flex':'none';
+      hint.textContent=HINTS[view];
+      render();
+      if(view==='month') scrollToToday();
+    });
+  });
+  hint.textContent=HINTS.month;
+
+  // ── 左欄 ──
+  function renderSidebar(){
+    eventList.innerHTML='';
+    state.events.forEach(ev=>{
+      const card=document.createElement('div');
+      card.className='event-card'; card.style.setProperty('--c',ev.color);
+      card.draggable=true;
+      card.innerHTML='<span class="name"></span><button class="del" title="刪除事件">✕</button>';
+      card.querySelector('.name').textContent=ev.name;
+      card.addEventListener('dragstart',e=>{
+        e.dataTransfer.setData('text/plain','new:'+ev.id);
+        e.dataTransfer.effectAllowed='copy';
+      });
+      card.querySelector('.del').addEventListener('click',()=>{
+        if(!confirm('刪除「'+ev.name+'」及其所有排期？'))return;
+        state.events=state.events.filter(x=>x.id!==ev.id);
+        state.placements=state.placements.filter(p=>p.eventId!==ev.id);
+        state.day=state.day.filter(p=>p.eventId!==ev.id);
+        render();
+      });
+      eventList.appendChild(card);
+    });
+  }
+
+  // ── 月檢視 ──
+  function renderGrid(){
+    const days=buildDays();
+    const n=days.length;
+    grid.style.gridTemplateColumns='170px repeat('+n+',44px)';
+    grid.innerHTML='';
+
+    const corner=document.createElement('div');
+    corner.className='corner month-head'; corner.textContent='事件 ＼ 日期';
+    grid.appendChild(corner);
+    let i=0;
+    while(i<n){
+      const m=days[i].getMonth(), y=days[i].getFullYear();
+      let span=0; while(i+span<n && days[i+span].getMonth()===m && days[i+span].getFullYear()===y) span++;
+      const mh=document.createElement('div');
+      mh.className='month-head'; mh.style.gridColumn='span '+span;
+      mh.textContent=y+' 年 '+(m+1)+' 月';
+      grid.appendChild(mh); i+=span;
+    }
+
+    const corner2=document.createElement('div');
+    corner2.className='corner day-head'; grid.appendChild(corner2);
+    days.forEach(d=>{
+      const h=document.createElement('div');
+      h.className='day-head'+(d.getDay()===0||d.getDay()===6?' weekend':'')+(fmt(d)===fmt(today)?' today':'');
+      h.innerHTML='<div class="d">'+(d.getMonth()+1)+'/'+d.getDate()+'</div><div class="w">'+WEEK[d.getDay()]+'</div>';
+      grid.appendChild(h);
+    });
+
+    if(!state.events.length){
+      const tip=document.createElement('div');
+      tip.className='empty-tip'; tip.style.gridColumn='1 / -1';
+      tip.textContent='左欄還沒有事件，先新增一個吧。';
+      grid.appendChild(tip);
+    }
+    state.events.forEach(ev=>{
+      const label=document.createElement('div');
+      label.className='row-label'; label.style.setProperty('--c',ev.color);
+      label.textContent=ev.name;
+      grid.appendChild(label);
+      days.forEach(d=>{
+        const ds=fmt(d);
+        const cell=document.createElement('div');
+        cell.className='cell'+(d.getDay()===0||d.getDay()===6?' weekend':'')+(ds===fmt(today)?' today':'');
+        cell.addEventListener('dragover',e=>{e.preventDefault(); cell.classList.add('over');});
+        cell.addEventListener('dragleave',()=>cell.classList.remove('over'));
+        cell.addEventListener('drop',e=>{
+          e.preventDefault(); cell.classList.remove('over');
+          handleMonthDrop(e.dataTransfer.getData('text/plain'), ds);
+        });
+        const placed=state.placements.find(p=>p.eventId===ev.id&&p.date===ds);
+        if(placed){
+          const chip=document.createElement('div');
+          chip.className='chip'; chip.style.setProperty('--c',ev.color);
+          chip.draggable=true; chip.title=ev.name+'　'+ds;
+          chip.textContent=ev.name.slice(0,4);
+          const x=document.createElement('span'); x.className='x'; x.textContent='×';
+          x.addEventListener('click',e=>{
+            e.stopPropagation();
+            state.placements=state.placements.filter(p=>!(p.eventId===ev.id&&p.date===ds));
+            render();
+          });
+          chip.appendChild(x);
+          chip.addEventListener('dragstart',e=>{
+            e.stopPropagation();
+            e.dataTransfer.setData('text/plain','mmove:'+ev.id+':'+ds);
+            e.dataTransfer.effectAllowed='move';
+          });
+          cell.appendChild(chip);
+        }
+        grid.appendChild(cell);
+      });
+    });
+  }
+
+  function handleMonthDrop(data,targetDate){
+    if(!data)return;
+    const p=data.split(':');
+    if(p[0]==='new'){
+      const evId=+p[1];
+      if(evById(evId)&&!state.placements.some(x=>x.eventId===evId&&x.date===targetDate))
+        state.placements.push({eventId:evId,date:targetDate});
+    }else if(p[0]==='mmove'){
+      const evId=+p[1], fromDate=p[2];
+      state.placements=state.placements.filter(x=>!(x.eventId===evId&&x.date===fromDate));
+      if(!state.placements.some(x=>x.eventId===evId&&x.date===targetDate))
+        state.placements.push({eventId:evId,date:targetDate});
+    }
+    render();
+  }
+
+  // ── 日檢視 ──
+  const dayText=document.getElementById('dayText');
+  const dayPicker=document.getElementById('dayPicker');
+  const tray=document.getElementById('tray');
+  const hoursEl=document.getElementById('hours');
+
+  function renderDay(){
+    const d=parse(dayDate);
+    dayText.textContent=d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate()+'（'+WEEK[d.getDay()]+'）';
+    dayPicker.value=dayDate;
+
+    // 本月排程托盤（月 → 日，單向）
+    tray.innerHTML='<span class="tray-title">本月排程：</span>';
+    const fromMonth=state.placements.filter(p=>p.date===dayDate).map(p=>evById(p.eventId)).filter(Boolean);
+    if(!fromMonth.length){
+      const none=document.createElement('span'); none.className='none';
+      none.textContent='這天在排期日曆上沒有排程';
+      tray.appendChild(none);
+    }
+    fromMonth.forEach(ev=>{
+      const c=document.createElement('span');
+      c.className='tray-chip'; c.style.setProperty('--c',ev.color);
+      c.textContent=ev.name; c.draggable=true;
+      c.addEventListener('dragstart',e=>{
+        e.dataTransfer.setData('text/plain','new:'+ev.id);
+        e.dataTransfer.effectAllowed='copy';
+      });
+      tray.appendChild(c);
+    });
+
+    // 24 小時列
+    hoursEl.innerHTML='';
+    const isToday=dayDate===fmt(today);
+    const nowH=new Date().getHours();
+    for(let h=0;h<24;h++){
+      const row=document.createElement('div');
+      row.className='hour-row'+(isToday&&h===nowH?' now':'');
+      const label=document.createElement('div');
+      label.className='hour-label';
+      label.textContent=String(h).padStart(2,'0')+':00';
+      const slot=document.createElement('div');
+      slot.className='hour-slot';
+      slot.addEventListener('dragover',e=>{e.preventDefault(); slot.classList.add('over');});
+      slot.addEventListener('dragleave',()=>slot.classList.remove('over'));
+      slot.addEventListener('drop',e=>{
+        e.preventDefault(); slot.classList.remove('over');
+        handleDayDrop(e.dataTransfer.getData('text/plain'), h);
+      });
+      state.day.filter(p=>p.date===dayDate&&p.hour===h).forEach(p=>{
+        const ev=evById(p.eventId); if(!ev)return;
+        const chip=document.createElement('div');
+        chip.className='day-chip'; chip.style.setProperty('--c',ev.color);
+        chip.textContent=ev.name; chip.draggable=true;
+        chip.title=ev.name+'　'+String(h).padStart(2,'0')+':00';
+        const x=document.createElement('span'); x.className='x'; x.textContent='×';
+        x.addEventListener('click',e=>{
+          e.stopPropagation();
+          state.day=state.day.filter(q=>!(q.eventId===p.eventId&&q.date===dayDate&&q.hour===h));
+          render();
+        });
+        chip.appendChild(x);
+        chip.addEventListener('dragstart',e=>{
+          e.stopPropagation();
+          e.dataTransfer.setData('text/plain','dmove:'+ev.id+':'+h);
+          e.dataTransfer.effectAllowed='move';
+        });
+        slot.appendChild(chip);
+      });
+      row.appendChild(label); row.appendChild(slot);
+      hoursEl.appendChild(row);
+    }
+    // 捲到目前時段附近
+    if(isToday){
+      const nowRow=hoursEl.querySelector('.hour-row.now');
+      if(nowRow&&!renderDay.scrolled){hoursEl.scrollTop=Math.max(0,nowRow.offsetTop-hoursEl.clientHeight/3); renderDay.scrolled=true;}
+    }
+  }
+
+  function handleDayDrop(data,targetHour){
+    if(!data)return;
+    const p=data.split(':');
+    if(p[0]==='new'){
+      const evId=+p[1];
+      if(evById(evId)&&!state.day.some(x=>x.eventId===evId&&x.date===dayDate&&x.hour===targetHour))
+        state.day.push({eventId:evId,date:dayDate,hour:targetHour});
+    }else if(p[0]==='dmove'){
+      const evId=+p[1], fromHour=+p[2];
+      state.day=state.day.filter(x=>!(x.eventId===evId&&x.date===dayDate&&x.hour===fromHour));
+      if(!state.day.some(x=>x.eventId===evId&&x.date===dayDate&&x.hour===targetHour))
+        state.day.push({eventId:evId,date:dayDate,hour:targetHour});
+    }
+    render();
+  }
+
+  function shiftDay(n){
+    const d=parse(dayDate); d.setDate(d.getDate()+n);
+    dayDate=fmt(d); renderDay.scrolled=true; render();
+  }
+  document.getElementById('prevDay').addEventListener('click',()=>shiftDay(-1));
+  document.getElementById('nextDay').addEventListener('click',()=>shiftDay(1));
+  document.getElementById('todayBtn').addEventListener('click',()=>{dayDate=fmt(today); render();});
+  dayPicker.addEventListener('change',()=>{if(dayPicker.value){dayDate=dayPicker.value; renderDay.scrolled=true; render();}});
+
+  // ── 新增事件 ──
+  const newName=document.getElementById('newName');
+  function addEvent(){
+    const name=newName.value.trim();
+    if(!name)return;
+    state.events.push({id:state.nextId,name,color:PALETTE[(state.nextId-1)%PALETTE.length]});
+    state.nextId++; newName.value='';
+    render();
+  }
+  document.getElementById('addBtn').addEventListener('click',addEvent);
+  newName.addEventListener('keydown',e=>{if(e.key==='Enter')addEvent();});
+
+  // ── 月面板拖移＋自動延長 ──
+  let panning=false,sx=0,sy=0,sl=0,st=0;
+  board.addEventListener('mousedown',e=>{
+    if(e.target.closest('.chip,.row-label,button'))return;
+    panning=true; sx=e.clientX; sy=e.clientY; sl=board.scrollLeft; st=board.scrollTop;
+    board.classList.add('dragging');
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!panning)return;
+    board.scrollLeft=sl-(e.clientX-sx);
+    board.scrollTop=st-(e.clientY-sy);
+  });
+  window.addEventListener('mouseup',()=>{panning=false; board.classList.remove('dragging');});
+  board.addEventListener('scroll',()=>{
+    if(board.scrollLeft+board.clientWidth>board.scrollWidth-150 && state.months<36){
+      const keep=board.scrollLeft;
+      state.months++; renderGrid(); save();
+      board.scrollLeft=keep;
+    }
+  });
+  function scrollToToday(){
+    requestAnimationFrame(()=>{
+      const t=grid.querySelector('.day-head.today');
+      if(t)board.scrollLeft=Math.max(0,t.offsetLeft-260);
+    });
+  }
+
+  // ── 匯出 / 匯入 ──
+  document.getElementById('exportBtn').addEventListener('click',()=>{
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='排期看板備份-'+fmt(today)+'.json';
+    a.click(); URL.revokeObjectURL(a.href);
+  });
+  const importFile=document.getElementById('importFile');
+  document.getElementById('importBtn').addEventListener('click',()=>importFile.click());
+  importFile.addEventListener('change',e=>{
+    const f=e.target.files[0]; if(!f)return;
+    const r=new FileReader();
+    r.onload=()=>{try{
+      const s=JSON.parse(r.result);
+      if(s.events&&s.placements){s.day=s.day||[]; state=s; render();}
+      else alert('檔案格式不正確');
+    }catch(err){alert('無法讀取備份檔');}};
+    r.readAsText(f); importFile.value='';
+  });
+
+  render();
+  scrollToToday();
+})();
+</script>
+</body>
+</html>
