@@ -9,7 +9,7 @@
     --bg:#f5f1e8; --panel:#fbf8f1; --line:#e4ddcd; --ink:#3d3a33; --muted:#9a927f;
     --accent:#8a6d3b; --today:#f3e7c8; --weekend:#f0ebdf;
   }
-  *{box-sizing:border-box; margin:0; padding:0;}
+  *{box-sizing:border-box; margin:0; padding:0; touch-action:manipulation;}
   body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column; overflow:hidden;}
 
   header{padding:12px 20px 0; display:flex; align-items:center; gap:16px; flex-wrap:wrap;}
@@ -87,6 +87,20 @@
   .day-chip{position:relative; background:var(--c,#ccc); color:#fff; font-size:12px; padding:6px 22px 6px 10px; border-radius:6px; cursor:grab; user-select:none; box-shadow:0 1px 3px rgba(0,0,0,.15); max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .day-chip .x{position:absolute; top:0; right:0; bottom:0; width:16px; background:rgba(0,0,0,.22); display:none; cursor:pointer; text-align:center; line-height:26px; font-size:11px;}
   .day-chip:hover .x{display:block;}
+
+  /* ── 備註 ─────────────────────── */
+  .event-card,.tray-chip{position:relative;}
+  .event-card.has-note::after{content:''; position:absolute; top:4px; right:28px; width:7px; height:7px; border-radius:50%; background:var(--c,#ccc);}
+  .chip.has-note::after,.day-chip.has-note::after,.tray-chip.has-note::after{content:''; position:absolute; top:3px; left:3px; width:6px; height:6px; border-radius:50%; background:#fff; box-shadow:0 0 2px rgba(0,0,0,.45);}
+  .modal-bg{position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:50;}
+  .modal-bg[hidden]{display:none;}
+  .modal{background:#fff; border-radius:12px; padding:18px; width:min(420px,90vw); box-shadow:0 10px 30px rgba(0,0,0,.25);}
+  .modal h3{font-size:15px; margin-bottom:10px; display:flex; align-items:center; gap:8px;}
+  .modal h3 .dot{width:10px; height:10px; border-radius:50%; background:var(--c,#ccc); flex:none;}
+  .modal textarea{width:100%; height:130px; padding:10px; border:1px solid var(--line); border-radius:8px; font-size:13px; resize:vertical; font-family:inherit; background:#fffdf8;}
+  .modal-btns{display:flex; gap:8px; justify-content:flex-end; margin-top:12px;}
+  .modal-btns button{padding:7px 16px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:13px;}
+  .modal-btns .primary{background:var(--accent); color:#fff; border:none;}
 </style>
 </head>
 <body>
@@ -131,14 +145,26 @@
   </div>
 </div>
 
+<!-- 備註視窗 -->
+<div class="modal-bg" id="noteModal" hidden>
+  <div class="modal">
+    <h3><span class="dot" id="noteDot"></span><span id="noteTitle"></span></h3>
+    <textarea id="noteText" placeholder="輸入備註…"></textarea>
+    <div class="modal-btns">
+      <button id="noteCancel">取消</button>
+      <button id="noteSave" class="primary">儲存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   const PALETTE=['#b3532f','#8a6d3b','#5f7d54','#4d7a8f','#7a5c8f','#a8506e','#5b6d9e','#8f7a3a','#527d72','#94502f'];
   const WEEK=['日','一','二','三','四','五','六'];
   const KEY='content-board-v1';
   const HINTS={
-    month:'把左欄事件拖到日期格；拖曳空白處可移動面板，拖到底會自動延長；點方塊 × 移除',
-    day:'把左欄事件或上方「本月排程」拖到時段；時段方塊可再拖移、按 × 移除（不影響月曆）'
+    month:'把左欄事件拖到日期格；拖曳空白處可移動面板，拖到底會自動延長；點方塊 × 移除；點兩下事件可看／編輯備註',
+    day:'把左欄事件或上方「本月排程」拖到時段；時段方塊可再拖移、按 × 移除（不影響月曆）；點兩下事件可看／編輯備註'
   };
 
   // ── 狀態 ──
@@ -174,6 +200,30 @@
   const hint=document.getElementById('hint');
 
   function evById(id){return state.events.find(e=>e.id===id);}
+  function noteSuffix(ev){return ev.note?'\n備註：'+ev.note:'';}
+
+  // ── 備註視窗 ──
+  const noteModal=document.getElementById('noteModal');
+  const noteTitle=document.getElementById('noteTitle');
+  const noteDot=document.getElementById('noteDot');
+  const noteText=document.getElementById('noteText');
+  let noteEvId=null;
+  function openNote(ev){
+    noteEvId=ev.id;
+    noteTitle.textContent=ev.name;
+    noteDot.style.setProperty('--c',ev.color);
+    noteText.value=ev.note||'';
+    noteModal.hidden=false;
+    noteText.focus();
+  }
+  document.getElementById('noteSave').addEventListener('click',()=>{
+    const ev=evById(noteEvId);
+    if(ev){ev.note=noteText.value.trim();}
+    noteModal.hidden=true; render();
+  });
+  document.getElementById('noteCancel').addEventListener('click',()=>{noteModal.hidden=true;});
+  noteModal.addEventListener('click',e=>{if(e.target===noteModal)noteModal.hidden=true;});
+  window.addEventListener('keydown',e=>{if(e.key==='Escape')noteModal.hidden=true;});
 
   // ── 總渲染 ──
   function render(){
@@ -201,10 +251,11 @@
     eventList.innerHTML='';
     state.events.forEach(ev=>{
       const card=document.createElement('div');
-      card.className='event-card'; card.style.setProperty('--c',ev.color);
-      card.draggable=true;
+      card.className='event-card'+(ev.note?' has-note':''); card.style.setProperty('--c',ev.color);
+      card.draggable=true; card.title='點兩下看／編輯備註'+noteSuffix(ev);
       card.innerHTML='<span class="name"></span><button class="del" title="刪除事件">✕</button>';
       card.querySelector('.name').textContent=ev.name;
+      card.addEventListener('dblclick',()=>openNote(ev));
       card.addEventListener('dragstart',e=>{
         e.dataTransfer.setData('text/plain','new:'+ev.id);
         e.dataTransfer.effectAllowed='copy';
@@ -273,9 +324,10 @@
         const placed=state.placements.find(p=>p.eventId===ev.id&&p.date===ds);
         if(placed){
           const chip=document.createElement('div');
-          chip.className='chip'; chip.style.setProperty('--c',ev.color);
-          chip.draggable=true; chip.title=ev.name+'　'+ds;
+          chip.className='chip'+(ev.note?' has-note':''); chip.style.setProperty('--c',ev.color);
+          chip.draggable=true; chip.title=ev.name+'　'+ds+noteSuffix(ev);
           chip.textContent=ev.name.slice(0,4);
+          chip.addEventListener('dblclick',e=>{e.stopPropagation(); openNote(ev);});
           const x=document.createElement('span'); x.className='x'; x.textContent='×';
           x.addEventListener('click',e=>{
             e.stopPropagation();
@@ -332,8 +384,10 @@
     }
     fromMonth.forEach(ev=>{
       const c=document.createElement('span');
-      c.className='tray-chip'; c.style.setProperty('--c',ev.color);
+      c.className='tray-chip'+(ev.note?' has-note':''); c.style.setProperty('--c',ev.color);
       c.textContent=ev.name; c.draggable=true;
+      c.title='點兩下看／編輯備註'+noteSuffix(ev);
+      c.addEventListener('dblclick',()=>openNote(ev));
       c.addEventListener('dragstart',e=>{
         e.dataTransfer.setData('text/plain','new:'+ev.id);
         e.dataTransfer.effectAllowed='copy';
@@ -362,9 +416,10 @@
       state.day.filter(p=>p.date===dayDate&&p.hour===h).forEach(p=>{
         const ev=evById(p.eventId); if(!ev)return;
         const chip=document.createElement('div');
-        chip.className='day-chip'; chip.style.setProperty('--c',ev.color);
+        chip.className='day-chip'+(ev.note?' has-note':''); chip.style.setProperty('--c',ev.color);
         chip.textContent=ev.name; chip.draggable=true;
-        chip.title=ev.name+'　'+String(h).padStart(2,'0')+':00';
+        chip.title=ev.name+'　'+String(h).padStart(2,'0')+':00'+noteSuffix(ev);
+        chip.addEventListener('dblclick',()=>openNote(ev));
         const x=document.createElement('span'); x.className='x'; x.textContent='×';
         x.addEventListener('click',e=>{
           e.stopPropagation();
