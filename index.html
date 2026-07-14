@@ -36,6 +36,12 @@
   .io-row{display:flex; gap:6px; margin-top:8px;}
   .io-row button{flex:1; padding:6px; font-size:12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; color:var(--muted);}
   .io-row button:hover{color:var(--ink);}
+  .sync-sec{margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); font-size:12px; color:var(--muted);}
+  .sync-sec .code{font-family:ui-monospace,Menlo,monospace; background:#f3eee2; padding:3px 8px; border-radius:6px; user-select:all; display:inline-block; margin-top:4px; color:var(--ink); letter-spacing:1px; word-break:break-all;}
+  .sync-sec .row{display:flex; gap:6px; margin-top:6px;}
+  .sync-sec button{flex:1; padding:6px; font-size:12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; color:var(--muted);}
+  .sync-sec button:hover{color:var(--ink);}
+  .sync-sec .msg{margin-top:5px; font-size:11px; min-height:14px;}
 
   /* ── 月看板 ─────────────────────── */
   .board{flex:1; overflow:auto; cursor:grab; position:relative;}
@@ -136,6 +142,7 @@
       <button id="importBtn">匯入備份</button>
       <input type="file" id="importFile" accept=".json" hidden>
     </div>
+    <div class="sync-sec" id="syncSec"></div>
   </aside>
 
   <!-- 月檢視 -->
@@ -193,8 +200,46 @@
   };
   state.day=state.day||[];    // 舊備份相容
   let view='month';
-  function save(){localStorage.setItem(KEY,JSON.stringify(state));}
+  let adopting=false;         // 正在套用雲端資料（避免回推）
+  function save(){
+    if(!adopting){state.updatedAt=Date.now(); schedulePush();}
+    localStorage.setItem(KEY,JSON.stringify(state));
+  }
   function load(){try{return JSON.parse(localStorage.getItem(KEY));}catch(e){return null;}}
+
+  // ── 雲端同步（Firebase）──
+  const DB_URL='https://content-planner-37d6d-default-rtdb.asia-southeast1.firebasedatabase.app';
+  const SYNC_KEY='content-board-syncid';
+  let syncId=localStorage.getItem(SYNC_KEY)||'';
+  let pushTimer=null;
+  function syncUrl(){return DB_URL+'/boards/'+syncId+'.json';}
+  function setSyncMsg(t){const el=document.getElementById('syncMsg'); if(el)el.textContent=t;}
+  function schedulePush(){
+    if(!syncId)return;
+    clearTimeout(pushTimer);
+    pushTimer=setTimeout(pushState,800);
+  }
+  async function pushState(){
+    if(!syncId)return;
+    try{
+      const r=await fetch(syncUrl(),{method:'PUT',body:JSON.stringify(state)});
+      if(!r.ok)throw 0;
+      setSyncMsg('已同步 '+new Date().toLocaleTimeString());
+    }catch(e){setSyncMsg('同步失敗，會自動重試');}
+  }
+  async function pullState(){
+    if(!syncId)return;
+    try{
+      const r=await fetch(syncUrl());
+      if(!r.ok)throw 0;
+      const remote=await r.json();
+      if(remote&&remote.events&&(remote.updatedAt||0)>(state.updatedAt||0)){
+        remote.day=remote.day||[];
+        adopting=true; state=remote; render(); adopting=false;
+      }
+      setSyncMsg('已同步 '+new Date().toLocaleTimeString());
+    }catch(e){setSyncMsg('同步失敗，會自動重試');}
+  }
 
   // ── 日期工具 ──
   const today=new Date(); today.setHours(0,0,0,0);
@@ -604,8 +649,58 @@
     r.readAsText(f); importFile.value='';
   });
 
+  // ── 同步設定介面 ──
+  const syncSec=document.getElementById('syncSec');
+  function renderSync(){
+    if(syncId){
+      syncSec.innerHTML='<div>雲端同步中，同步碼：</div><div class="code"></div>'+
+        '<div class="row"><button id="syncCopy">複製同步碼</button><button id="syncOff">停用同步</button></div>'+
+        '<div class="msg" id="syncMsg"></div>';
+      syncSec.querySelector('.code').textContent=syncId;
+      document.getElementById('syncCopy').onclick=()=>{
+        navigator.clipboard.writeText(syncId).then(()=>setSyncMsg('已複製，到另一台裝置按「輸入同步碼」貼上')).catch(()=>setSyncMsg('請手動選取複製'));
+      };
+      document.getElementById('syncOff').onclick=()=>{
+        if(!confirm('停用後此裝置不再同步（雲端資料會保留）。確定？'))return;
+        syncId=''; localStorage.removeItem(SYNC_KEY); renderSync();
+      };
+    }else{
+      syncSec.innerHTML='<div>雲端同步（手機 ↔ 電腦）</div>'+
+        '<div class="row"><button id="syncNew">建立同步碼</button><button id="syncJoin">輸入同步碼</button></div>'+
+        '<div class="msg" id="syncMsg"></div>';
+      document.getElementById('syncNew').onclick=()=>{
+        const a=new Uint8Array(12); crypto.getRandomValues(a);
+        syncId=Array.from(a,x=>'abcdefghjkmnpqrstuvwxyz23456789'[x%31]).join('');
+        localStorage.setItem(SYNC_KEY,syncId);
+        renderSync(); pushState();
+        setSyncMsg('已上傳，把同步碼輸入到另一台裝置即可');
+      };
+      document.getElementById('syncJoin').onclick=async()=>{
+        const code=(prompt('輸入另一台裝置的同步碼（若雲端已有資料，會覆蓋此裝置目前的內容）：')||'').trim();
+        if(!code)return;
+        syncId=code; localStorage.setItem(SYNC_KEY,syncId); renderSync();
+        try{
+          const r=await fetch(syncUrl());
+          const remote=await r.json();
+          if(remote&&remote.events){
+            remote.day=remote.day||[];
+            adopting=true; state=remote; render(); adopting=false;
+            setSyncMsg('已載入雲端資料');
+          }else{
+            pushState();
+          }
+        }catch(e){setSyncMsg('連線失敗，請確認同步碼');}
+      };
+    }
+  }
+  setInterval(pullState,30000);
+  window.addEventListener('focus',pullState);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)pullState();});
+
   render();
   scrollToToday();
+  renderSync();
+  pullState();
 })();
 </script>
 </body>
