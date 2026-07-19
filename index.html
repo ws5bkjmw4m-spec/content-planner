@@ -85,7 +85,9 @@
   .tray .none{font-size:12px; color:var(--muted);}
 
   .hours{flex:1; overflow-y:auto;}
-  .hour-row{display:flex; border-bottom:1px solid var(--line); min-height:46px;}
+  .hour-row{display:flex; border-bottom:1px solid var(--line); min-height:36px;}
+  .hour-row.full{border-bottom:1px dashed var(--line);}
+  .hour-row.half .hour-label{color:#c3bba7; font-size:10px;}
   .hour-row.now{background:var(--today);}
   .hour-label{width:72px; flex:none; font-size:12px; color:var(--muted); padding:8px 10px 0 0; text-align:right; border-right:1px solid var(--line);}
   .hour-row.now .hour-label{color:var(--accent); font-weight:700;}
@@ -156,6 +158,8 @@
       <input type="date" id="dayPicker">
       <button id="todayBtn">今天</button>
       <button id="nextDay">▶</button>
+      <button id="planMdBtn" title="把本日安排匯出成 Obsidian 計畫檔">⬇ 匯出計畫MD</button>
+      <button id="planCopyBtn" title="複製本日計畫的 Markdown 內容">📋 複製計畫</button>
     </div>
     <div class="tray" id="tray"></div>
     <div class="hours" id="hours"></div>
@@ -201,8 +205,11 @@
   state.day=state.day||[];    // 舊備份相容
   let view='month';
   let adopting=false;         // 正在套用雲端資料（避免回推）
+  let lastSnap='';            // 上次資料快照（不含時間戳），只有真的變動才推雲端
   function save(){
-    if(!adopting){state.updatedAt=Date.now(); schedulePush();}
+    const snap=JSON.stringify(Object.assign({},state,{updatedAt:0}));
+    if(!adopting&&lastSnap!==''&&snap!==lastSnap){state.updatedAt=Date.now(); schedulePush();}
+    lastSnap=snap;
     localStorage.setItem(KEY,JSON.stringify(state));
   }
   function load(){try{return JSON.parse(localStorage.getItem(KEY));}catch(e){return null;}}
@@ -246,6 +253,7 @@
   const startMonth=new Date(today.getFullYear(),today.getMonth(),1);
   function fmt(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
   function parse(s){const p=s.split('-'); return new Date(+p[0],+p[1]-1,+p[2]);}
+  function hhmm(h){return String(Math.floor(h)).padStart(2,'0')+':'+(h%1?'30':'00');}
   let dayDate=fmt(today);     // 日檢視目前日期
 
   function buildDays(){
@@ -514,16 +522,17 @@
       tray.appendChild(c);
     });
 
-    // 24 小時列
+    // 24 小時（每 30 分鐘一格）
     hoursEl.innerHTML='';
     const isToday=dayDate===fmt(today);
-    const nowH=new Date().getHours();
-    for(let h=0;h<24;h++){
+    const nowD=new Date();
+    const nowH=nowD.getHours()+(nowD.getMinutes()>=30?0.5:0);
+    for(let h=0;h<24;h+=0.5){
       const row=document.createElement('div');
-      row.className='hour-row'+(isToday&&h===nowH?' now':'');
+      row.className='hour-row'+(h%1?' half':' full')+(isToday&&h===nowH?' now':'');
       const label=document.createElement('div');
       label.className='hour-label';
-      label.textContent=String(h).padStart(2,'0')+':00';
+      label.textContent=hhmm(h);
       const slot=document.createElement('div');
       slot.className='hour-slot';
       slot.addEventListener('dragover',e=>{e.preventDefault(); slot.classList.add('over');});
@@ -537,7 +546,7 @@
         const chip=document.createElement('div');
         chip.className='day-chip'+(ev.note?' has-note':''); chip.style.setProperty('--c',ev.color);
         chip.textContent=ev.name; chip.draggable=true;
-        chip.title=ev.name+'　'+String(h).padStart(2,'0')+':00'+noteSuffix(ev);
+        chip.title=ev.name+'　'+hhmm(h)+noteSuffix(ev);
         chip.addEventListener('dblclick',()=>openNote(ev));
         attachLongPress(chip,ev);
         const x=document.createElement('span'); x.className='x'; x.textContent='×';
@@ -628,6 +637,49 @@
     });
   }
 
+  // ── 匯出當日計畫（Obsidian Markdown）──
+  function buildPlanMarkdown(dateStr){
+    const items=state.day.filter(p=>p.date===dateStr).sort((a,b)=>a.hour-b.hour);
+    if(!items.length)return null;
+    // 合併同一事件的連續時段（例如 14、15 點都是「看盤」→ 14:00–16:00）
+    const rows=[];
+    items.forEach(p=>{
+      const last=rows[rows.length-1];
+      if(last&&last.eventId===p.eventId&&last.endHour===p.hour){
+        last.endHour=p.hour+0.5;
+      }else{
+        rows.push({eventId:p.eventId,startHour:p.hour,endHour:p.hour+0.5});
+      }
+    });
+    const hh=h=>hhmm(h);
+    let md='# '+dateStr+' 計畫\n\n| 事件 | 開始 | 結束 | 備註 |\n|---|---|---|---|\n';
+    rows.forEach(r=>{
+      const ev=evById(r.eventId); if(!ev)return;
+      const note=(ev.note||'').replace(/\r?\n/g,'；').trim();
+      md+='| '+ev.name+' | '+hh(r.startHour)+' | '+hh(r.endHour)+' | '+note+' |\n';
+    });
+    return md;
+  }
+  document.getElementById('planMdBtn').addEventListener('click',()=>{
+    const md=buildPlanMarkdown(dayDate);
+    if(!md){alert(dayDate+' 沒有安排任何時段');return;}
+    const blob=new Blob([md],{type:'text/markdown'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=dayDate+'_計畫.md';
+    a.click(); URL.revokeObjectURL(a.href);
+  });
+  document.getElementById('planCopyBtn').addEventListener('click',async()=>{
+    const md=buildPlanMarkdown(dayDate);
+    if(!md){alert(dayDate+' 沒有安排任何時段');return;}
+    try{
+      await navigator.clipboard.writeText(md);
+      const b=document.getElementById('planCopyBtn');
+      const t=b.textContent; b.textContent='✓ 已複製';
+      setTimeout(()=>{b.textContent=t;},1500);
+    }catch(e){alert('複製失敗，請改用「匯出計畫MD」下載');}
+  });
+
   // ── 匯出 / 匯入 ──
   document.getElementById('exportBtn').addEventListener('click',()=>{
     const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
@@ -697,8 +749,7 @@
   window.addEventListener('focus',pullState);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)pullState();});
 
-  render();
-  scrollToToday();
+  setView('day');           // 預設開啟「當日安排」
   renderSync();
   pullState();
 })();
