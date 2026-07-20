@@ -219,6 +219,30 @@
   const SYNC_KEY='content-board-syncid';
   let syncId=localStorage.getItem(SYNC_KEY)||'';
   let pushTimer=null;
+  const API_KEY='AIzaSyCRy69Y8z9Pegp-GQPiY_hB09sMAGUKR6s';
+  const AUTH_KEY='content-board-auth';
+  async function getToken(){
+    let a=null; try{a=JSON.parse(localStorage.getItem(AUTH_KEY));}catch(e){}
+    if(a&&a.exp>Date.now()+300000) return a.idToken;
+    try{
+      if(a&&a.refreshToken){
+        const r=await fetch('https://securetoken.googleapis.com/v1/token?key='+API_KEY,{
+          method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(a.refreshToken)});
+        if(r.ok){const j=await r.json();
+          a={idToken:j.id_token,refreshToken:j.refresh_token,exp:Date.now()+j.expires_in*1000};
+          localStorage.setItem(AUTH_KEY,JSON.stringify(a)); return a.idToken;}
+      }
+    }catch(e){}
+    const r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signUp?key='+API_KEY,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({returnSecureToken:true})});
+    if(!r.ok)throw new Error('auth failed');
+    const j=await r.json();
+    a={idToken:j.idToken,refreshToken:j.refreshToken,exp:Date.now()+j.expiresIn*1000};
+    localStorage.setItem(AUTH_KEY,JSON.stringify(a));
+    return a.idToken;
+  }
+  async function authedUrl(){return syncUrl()+'?auth='+await getToken();}
   function syncUrl(){return DB_URL+'/boards/'+syncId+'.json';}
   function setSyncMsg(t){const el=document.getElementById('syncMsg'); if(el)el.textContent=t;}
   function schedulePush(){
@@ -229,7 +253,8 @@
   async function pushState(){
     if(!syncId)return;
     try{
-      const r=await fetch(syncUrl(),{method:'PUT',body:JSON.stringify(state)});
+      const r=await fetch(await authedUrl(),{method:'PUT',body:JSON.stringify(state)});
+      if(r.status===401)localStorage.removeItem(AUTH_KEY);
       if(!r.ok)throw 0;
       setSyncMsg('已同步 '+new Date().toLocaleTimeString());
     }catch(e){setSyncMsg('同步失敗，會自動重試');}
@@ -237,7 +262,8 @@
   async function pullState(){
     if(!syncId)return;
     try{
-      const r=await fetch(syncUrl());
+      const r=await fetch(await authedUrl());
+      if(r.status===401)localStorage.removeItem(AUTH_KEY);
       if(!r.ok)throw 0;
       const remote=await r.json();
       if(remote&&remote.events&&(remote.updatedAt||0)>(state.updatedAt||0)){
@@ -732,7 +758,7 @@
         if(!code)return;
         syncId=code; localStorage.setItem(SYNC_KEY,syncId); renderSync();
         try{
-          const r=await fetch(syncUrl());
+          const r=await fetch(await authedUrl());
           const remote=await r.json();
           if(remote&&remote.events){
             remote.day=remote.day||[];
