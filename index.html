@@ -206,9 +206,10 @@
   let view='month';
   let adopting=false;         // 正在套用雲端資料（避免回推）
   let lastSnap='';            // 上次資料快照（不含時間戳），只有真的變動才推雲端
+  let dirty=false;            // 本機有尚未推送的變動
   function save(){
     const snap=JSON.stringify(Object.assign({},state,{updatedAt:0}));
-    if(!adopting&&lastSnap!==''&&snap!==lastSnap){state.updatedAt=Date.now(); schedulePush();}
+    if(!adopting&&lastSnap!==''&&snap!==lastSnap){state.updatedAt=Date.now(); dirty=true; schedulePush();}
     lastSnap=snap;
     localStorage.setItem(KEY,JSON.stringify(state));
   }
@@ -217,7 +218,25 @@
   // ── 雲端同步（Firebase）──
   const DB_URL='https://content-planner-37d6d-default-rtdb.asia-southeast1.firebasedatabase.app';
   const SYNC_KEY='content-board-syncid';
+  const SEEN_KEY='content-board-lastseen';
   let syncId=localStorage.getItem(SYNC_KEY)||'';
+  let lastSeen=localStorage.getItem(SEEN_KEY); lastSeen=lastSeen===null?null:+lastSeen;
+  function saveSeen(){localStorage.setItem(SEEN_KEY,String(lastSeen));}
+  // 把雲端資料「合併」進本機（聯集，不互相覆蓋）
+  function mergeRemote(rm){
+    rm.events=rm.events||[]; rm.placements=rm.placements||[]; rm.day=rm.day||[];
+    const evIds=new Set(state.events.map(e=>e.id));
+    rm.events.forEach(e=>{if(!evIds.has(e.id))state.events.push(e);});
+    state.events.forEach(e=>{const re=rm.events.find(x=>x.id===e.id); if(re&&re.note&&!e.note)e.note=re.note;});
+    const pk=x=>x.eventId+'|'+x.date;
+    const pset=new Set(state.placements.map(pk));
+    rm.placements.forEach(x=>{if(!pset.has(pk(x)))state.placements.push(x);});
+    const dk=x=>x.eventId+'|'+x.date+'|'+x.hour;
+    const dset=new Set(state.day.map(dk));
+    rm.day.forEach(x=>{if(!dset.has(dk(x)))state.day.push(x);});
+    state.nextId=Math.max(state.nextId||1,rm.nextId||1);
+    state.months=Math.max(state.months||3,rm.months||3);
+  }
   let pushTimer=null;
   const API_KEY='AIzaSyCRy69Y8z9Pegp-GQPiY_hB09sMAGUKR6s';
   const AUTH_KEY='content-board-auth';
@@ -253,9 +272,20 @@
   async function pushState(){
     if(!syncId)return;
     try{
+      const r0=await fetch(await authedUrl());
+      if(r0.ok){
+        const remote=await r0.json();
+        if(remote&&remote.events&&remote.updatedAt!==lastSeen){
+          mergeRemote(remote);
+          adopting=true; render(); adopting=false;
+        }
+      }
+      state.updatedAt=Date.now();
       const r=await fetch(await authedUrl(),{method:'PUT',body:JSON.stringify(state)});
       if(r.status===401)localStorage.removeItem(AUTH_KEY);
       if(!r.ok)throw 0;
+      dirty=false; lastSeen=state.updatedAt; saveSeen();
+      localStorage.setItem(KEY,JSON.stringify(state));
       setSyncMsg('已同步 '+new Date().toLocaleTimeString());
     }catch(e){setSyncMsg('同步失敗，會自動重試');}
   }
@@ -266,9 +296,17 @@
       if(r.status===401)localStorage.removeItem(AUTH_KEY);
       if(!r.ok)throw 0;
       const remote=await r.json();
-      if(remote&&remote.events&&(remote.updatedAt||0)>(state.updatedAt||0)){
-        remote.day=remote.day||[];
-        adopting=true; state=remote; render(); adopting=false;
+      if(remote&&remote.events&&remote.updatedAt!==lastSeen){
+        if(lastSeen===null||dirty){
+          mergeRemote(remote);
+          adopting=true; render(); adopting=false;
+          lastSeen=remote.updatedAt; saveSeen();
+          schedulePush();
+        }else{
+          remote.day=remote.day||[];
+          adopting=true; state=remote; render(); adopting=false;
+          lastSeen=remote.updatedAt; saveSeen();
+        }
       }
       setSyncMsg('已同步 '+new Date().toLocaleTimeString());
     }catch(e){setSyncMsg('同步失敗，會自動重試');}
@@ -740,7 +778,7 @@
       };
       document.getElementById('syncOff').onclick=()=>{
         if(!confirm('停用後此裝置不再同步（雲端資料會保留）。確定？'))return;
-        syncId=''; localStorage.removeItem(SYNC_KEY); renderSync();
+        syncId=''; localStorage.removeItem(SYNC_KEY); localStorage.removeItem(SEEN_KEY); lastSeen=null; renderSync();
       };
     }else{
       syncSec.innerHTML='<div>雲端同步（手機 ↔ 電腦）</div>'+
@@ -756,14 +794,16 @@
       document.getElementById('syncJoin').onclick=async()=>{
         const code=(prompt('輸入另一台裝置的同步碼（若雲端已有資料，會覆蓋此裝置目前的內容）：')||'').trim();
         if(!code)return;
-        syncId=code; localStorage.setItem(SYNC_KEY,syncId); renderSync();
+        syncId=code; localStorage.setItem(SYNC_KEY,syncId); lastSeen=null; renderSync();
         try{
           const r=await fetch(await authedUrl());
           const remote=await r.json();
           if(remote&&remote.events){
-            remote.day=remote.day||[];
-            adopting=true; state=remote; render(); adopting=false;
-            setSyncMsg('已載入雲端資料');
+            mergeRemote(remote);
+            adopting=true; render(); adopting=false;
+            lastSeen=remote.updatedAt; saveSeen();
+            schedulePush();
+            setSyncMsg('已載入並合併雲端資料');
           }else{
             pushState();
           }
